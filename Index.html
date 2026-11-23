@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rommé Karten-Scanner (Web)</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --primary: #1d4ed8;
+      --primary-hover: #1e40af;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent-bg: #eff6ff;
+    }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+    }
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    }
+    h1 { margin: 0 0 4px; font-size: 1.4rem; }
+    .sub { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    video, canvas {
+      width: 100%;
+      max-height: 260px;
+      border-radius: 10px;
+      background: #0f172a;
+      object-fit: cover;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: 0.15s;
+    }
+    button:hover:not(:disabled) { background: #f8fafc; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    button.primary:hover:not(:disabled) { background: var(--primary-hover); }
+    button.danger { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+    .status {
+      margin-top: 8px;
+      font-size: 0.85rem;
+      color: var(--muted);
+      min-height: 1.2em;
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 10px 0 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fafafa;
+    }
+    .result-box {
+      background: var(--accent-bg);
+      border-color: #bfdbfe;
+    }
+    .total-big {
+      font-size: 2rem;
+      font-weight: 800;
+      color: var(--primary);
+      margin: 4px 0;
+    }
+    .hint { font-size: 0.82rem; color: var(--muted); margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="box">
+      <h1>Rommé Karten-Scanner</h1>
+      <p class="sub">Joker = 25 · Ass = 11 · König / Dame / Bube = 10 · Zahlen = Nennwert</p>
+    </div>
+
+    <div class="box">
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="canvas" style="display:none;"></canvas>
+
+      <div class="row">
+        <button id="startCamBtn" class="primary">Kamera starten</button>
+        <button id="scanBtn" class="primary" disabled>Foto scannen &amp; erkennen</button>
+        <button id="clearBtn">Liste leeren</button>
+      </div>
+      <div id="status" class="status">Kamera noch nicht gestartet.</div>
+
+      <div class="row" style="margin-top:12px;">
+        <button onclick="addCard('Joker', 25)">+ Joker (25)</button>
+        <button onclick="addCard('Ass', 11)">+ Ass (11)</button>
+        <button onclick="addCard('König', 10)">+ König (10)</button>
+        <button onclick="addCard('Dame', 10)">+ Dame (10)</button>
+        <button onclick="addCard('Bube', 10)">+ Bube (10)</button>
+      </div>
+      <div class="hint">Tipp: Falls die Kamera Bildkarten ohne Buchstaben/Zahlen zeigt, einfach per Klick hinzufügen.</div>
+    </div>
+
+    <div class="box">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong>Erfasste Karten (<span id="count">0</span>)</strong>
+        <strong>Zwischensumme: <span id="subtotal">0</span> Pkt.</strong>
+      </div>
+      <ul id="cardList"></ul>
+
+      <div class="row" style="margin-top:14px;">
+        <button id="calcBtn" class="primary" style="flex:1;" disabled>Gesamtpunkte berechnen</button>
+      </div>
+    </div>
+
+    <div id="resultBox" class="box result-box" style="display:none;">
+      <div><strong>Endabrechnung</strong></div>
+      <div id="finalTotal" class="total-big">0 Punkte</div>
+      <div id="finalDetail" class="sub"></div>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const startCamBtn = document.getElementById('startCamBtn');
+    const scanBtn = document.getElementById('scanBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const calcBtn = document.getElementById('calcBtn');
+    const statusEl = document.getElementById('status');
+    const cardListEl = document.getElementById('cardList');
+    const countEl = document.getElementById('count');
+    const subtotalEl = document.getElementById('subtotal');
+    const resultBox = document.getElementById('resultBox');
+    const finalTotalEl = document.getElementById('finalTotal');
+    const finalDetailEl = document.getElementById('finalDetail');
+
+    let cards = [];
+    let stream = null;
+
+    function addCard(label, points) {
+      cards.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), label, points });
+      resultBox.style.display = 'none';
+      render();
+    }
+
+    function removeCard(id) {
+      cards = cards.filter(c => c.id !== id);
+      resultBox.style.display = 'none';
+      render();
+    }
+
+    function getSubtotal() {
+      return cards.reduce((sum, c) => sum + c.points, 0);
+    }
+
+    function render() {
+      cardListEl.innerHTML = '';
+      for (const c of cards) {
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <div>
+            <strong>${c.label}</strong>
+            <div class="sub">${c.points} Punkte</div>
+          </div>
+          <button class="danger" onclick="removeCard('${c.id}')">Entfernen</button>
+        `;
+        cardListEl.appendChild(li);
+      }
+      const sub = getSubtotal();
+      countEl.textContent = String(cards.length);
+      subtotalEl.textContent = String(sub);
+      calcBtn.disabled = cards.length === 0;
+    }
+
+    function extractCardsFromOcr(text) {
+      const upper = (text || '').toUpperCase();
+      const found = [];
+
+      if (/\bJOKER\b/.test(upper)) found.push({ label: 'Joker', points: 25 });
+      if (/\bASS\b/.test(upper)) found.push({ label: 'Ass', points: 11 });
+      if (/\b(KÖNIG|KOENIG)\b/.test(upper)) found.push({ label: 'König', points: 10 });
+      if (/\bDAME\b/.test(upper)) found.push({ label: 'Dame', points: 10 });
+      if (/\bBUBE\b/.test(upper)) found.push({ label: 'Bube', points: 10 });
+
+      const tokens = upper.split(/[^A-ZÖÄÜ0-9]+/).filter(Boolean);
+      const seen = new Set();
+
+      for (const tok of tokens) {
+        if (seen.has(tok)) continue;
+        seen.add(tok);
+
+        if (tok === 'A') found.push({ label: 'Ass', points: 11 });
+        else if (tok === 'K') found.push({ label: 'König', points: 10 });
+        else if (tok === 'Q' || tok === 'D') found.push({ label: 'Dame', points: 10 });
+        else if (tok === 'J' || tok === 'B') found.push({ label: 'Bube', points: 10 });
+        else if (['2','3','4','5','6','7','8','9','10'].includes(tok)) {
+          found.push({ label: `Karte ${tok}`, points: Number(tok) });
+        }
+      }
+      return found;
+    }
+
+    startCamBtn.addEventListener('click', async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        video.srcObject = stream;
+        scanBtn.disabled = false;
+        statusEl.textContent = 'Kamera aktiv. Karten ins Bild halten und scannen.';
+      } catch (err) {
+        statusEl.textContent = 'Kamera konnte nicht gestartet werden: ' + err.message;
+      }
+    });
+
+    scanBtn.addEventListener('click', async () => {
+      if (!video.videoWidth) return;
+      scanBtn.disabled = true;
+      statusEl.textContent = 'Texterkennung läuft...';
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      try {
+        const { data } = await Tesseract.recognize(canvas, 'deu+eng');
+        const detected = extractCardsFromOcr(data.text);
+        if (detected.length === 0) {
+          statusEl.textContent = `Kein eindeutiger Kartenwert erkannt ("${data.text.trim().slice(0, 40)}"). Bitte per Button ergänzen.`;
+        } else {
+          for (const d of detected) addCard(d.label, d.points);
+          statusEl.textContent = `Erkannt und hinzugefügt: ${detected.map(d => `${d.label} (${d.points})`).join(', ')}`;
+        }
+      } catch (err) {
+        statusEl.textContent = 'Fehler bei der Texterkennung: ' + err.message;
+      } finally {
+        scanBtn.disabled = false;
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      cards = [];
+      resultBox.style.display = 'none';
+      statusEl.textContent = 'Liste geleert.';
+      render();
+    });
+
+    calcBtn.addEventListener('click', () => {
+      const sub = getSubtotal();
+      const doubled = window.confirm(
+        `Aktuelle Summe: ${sub} Punkte.\n\nWurde Hand gespielt und sollen die Gesamtpunkte verdoppelt werden?`
+      );
+      const total = doubled ? sub * 2 : sub;
+      finalTotalEl.textContent = `${total} Punkte`;
+      finalDetailEl.textContent = doubled
+        ? `Verdoppelt wegen Handspiel (Basis: ${sub} × 2)`
+        : `Ohne Handspiel-Verdopplung (Basis: ${sub})`;
+      resultBox.style.display = 'block';
+    });
+
+    render();
+  </script>
+</body>
+</html>
